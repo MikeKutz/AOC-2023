@@ -1,0 +1,74 @@
+with
+  input_txt (txt) as (
+    select q'[#.##..##.
+..#.##.#.
+##......#
+##......#
+..#.##.#.
+..##..##.
+#.#.##.#.
+
+#...##..#
+#....#..#
+..##..###
+#####.##.
+#####.##.
+..##..###
+#....#..#
+]'
+  ), parsed_txt (block#, row#, txt, block_len, txt_len ) as (
+    select b.rn, r.rn, r.row_txt
+          ,max(r.rn) over (partition by b.rn)
+          , length( r.row_txt )
+    from input_txt i
+      cross apply (select rownum rn, trim(x.column_value) block_txt
+                   from apex_string.split( i.txt, chr(10) || chr(10) ) x
+                   where trim(x.column_value) is not null
+                   ) b
+      cross apply (select rownum rn, trim(y.column_value) row_txt
+                   from apex_string.split( b.block_txt, chr(10) ) y
+                   where trim( y.column_value ) is not null
+                   ) r
+  ), vertical_splits (block#, vert#, block_len) as (
+    select block#, vert#, block_len from(
+    select p.*
+      ,v.vert#
+      ,substr(
+        substr(p.txt,1,v.vert#) || reverse(substr(p.txt,1,v.vert#))
+        ,1, p.txt_len ) abc
+      ,substr(
+        substr(p.txt,1,v.vert#) || reverse(substr(p.txt,1,v.vert#))
+        ,1, p.txt_len ) = p.txt vert_match_fwd
+    from parsed_txt p
+      cross apply (select level vert# from dual connect by level < p.txt_len ) v
+    ) where vert_match_fwd is true
+    group by block#, vert#, block_len
+    having count(*) = block_len
+  ), matched_rows ( block#, row#, txt, block_len, txt_len, mirror_row#) as (
+  select p.block#, p.row#, p.txt, p.block_len, p.txt_len, r.row#
+  from parsed_txt p
+    left join parsed_txt r
+      on p.block#=r.block# and p.txt = r.txt and p.row# != r.row#
+  ), horizontal_splits as (
+    select block#
+      ,floor((mirror_end - mirror_start)/2 + mirror_start) horz#
+    from matched_rows
+    match_recognize (
+      partition by block# order by row#
+      measures
+        first( matched_row.row# )  as mirror_start
+        ,last(  matched_row.row# ) as mirror_end
+        ,min(block_len)            as block_len
+      pattern ( matched_row+ )
+      define
+        matched_row as mirror_row# = next( mirror_row# ) + 1 or mirror_row# = prev( mirror_row# ) - 1
+    )
+    where mirror_start = 1 or mirror_end = block_len
+)
+select sum( n ) from (
+  select horz# * 100 N
+  from horizontal_splits
+  union all
+  select vert#
+  from vertical_splits
+)

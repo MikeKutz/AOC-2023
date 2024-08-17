@@ -1,0 +1,79 @@
+with
+  star_map (txt) as (
+    select q'[...#......
+.......#..
+#.........
+..........
+......#...
+.#........
+.........#
+..........
+.......#..
+#...#.....]'
+), star_lines (rn, star_line) as (
+  select rownum, trim(l.column_value)
+  from star_map m
+    cross apply apex_string.split( m.txt, chr(10) ) l
+), star_locations (x_position, y_position, star_line) as (
+  select instr(l.star_line, '#')
+    ,l.rn
+    ,l.star_line
+  from star_lines l
+  where instr(l.star_line, '#') > 0
+  union all
+  select instr(s.star_line, '#', s.x_position + 1)
+    ,s.y_position
+    ,s.star_line
+  from star_locations s
+  where instr(s.star_line, '#', s.x_position + 1) > 0
+), blank_rows (y_positions) as (
+  select l.rn
+  from star_lines l
+  where l.star_line not like '%#%'
+), blank_columns ( x_positions ) as (
+  select x.column_value
+  from table(
+    cast(multiset( select level from dual connect by level <= (select length(star_line) from star_lines where rn=1 ) )  as apex_t_number)
+    ) x
+  except
+  select y.column_value
+  from table(
+    cast(multiset( select distinct x_position from star_locations ) as apex_t_number )
+  ) y
+), all_stars (star#,x,y) as (
+  select row_number() over (order by y_position, x_position)
+    ,x_position, y_position
+  from star_locations
+), star_pairs as (
+  select a.star#, b.star# other_star
+    , a.x, a.y
+    ,b.x other_x, b.y other_y
+    ,b.x - a.x delta_x
+    ,b.y - a.y delta_y
+    ,least(a.x,b.x) min_x
+    ,greatest(a.x,b.x) max_x
+    ,(select  count(*)
+      from blank_columns z
+      where z.x_positions between least(a.x,b.x) and greatest(a.x,b.x)
+      ) more_x
+    ,(select cast(count(*)  as int )
+      from blank_rows w
+      where w.y_positions between least(a.y,b.y) and greatest(a.y,b.y)
+      ) more_y
+  from all_stars a, all_stars b
+  where a.star# < b.star#
+)
+--select s.*
+--,(select count(*)
+--      from blank_columns b
+--      where b.x_positions between least(s.x,s.other_x) and greatest(s.x,s.other_x)
+--      ) more_x2
+---- why does `more_x` not equal to `more_x2`
+--
+--
+--from star_pairs s
+--where s.star# = 5 and s.other_star = 9;
+
+
+select sum(abs(delta_x) + abs(delta_y) + more_x + more_y ) min_distance
+from star_pairs
